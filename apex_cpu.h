@@ -33,6 +33,7 @@ typedef struct CPU_Stage
     int ps1;
     int ps2;
     int rd;
+    int pd;
     int imm;
     int rs1_value;
     int rs2_value;
@@ -97,6 +98,32 @@ typedef struct CPU_ROB
     int mem_error_codes;
 } CPU_ROB;
 
+typedef struct CPU_Godzilla
+{
+    int pc;
+    char opcode_str[128];
+    int opcode;
+    int rs1;
+    int rs2;
+    int ps1;
+    int ps2;
+    int rd;
+    int pd;
+    int overwritten_pd;
+    int imm;
+    int rs1_value;
+    int rs2_value;
+    int ps1_value;
+    int ps2_value;
+    int ps1_valid;
+    int ps2_valid;
+    int result_buffer;
+    int memory_address;
+    int has_insn;
+    int enter_godzilla; // This specifies if dispatch should happen or not
+    int lsq_index;      // This is the index allocated for the load/store instruction arrived at the Godzilla at the current cycle
+} CPU_Godzilla;
+
 /* Model of APEX CPU */
 typedef struct APEX_CPU
 {
@@ -115,12 +142,17 @@ typedef struct APEX_CPU
     int positive_flag;              /* {TRUE, FALSE} Used by BP and BNP to branch */
     int negative_flag;             /* {TRUE, FALSE} Used by BN and BNN to branch */
     int fetch_from_next_cycle;
+    int decode_from_next_cycle;
+    int dispatch_from_next_cycle;
+    int overwritten_pd;
+
+    int sim_n;
 
     /* Pipeline stages */
     CPU_Stage fetch;
     CPU_Stage decode_rename;
     CPU_Stage rename_dispatch;
-    CPU_Stage godzilla;
+    CPU_Godzilla godzilla;
     CPU_Stage execute;
     
     CPU_IQ cpu_iq[IQ_SIZE];
@@ -128,16 +160,23 @@ typedef struct APEX_CPU
     CPU_ROB cpu_rob[ROB_SIZE];
     CPU_PRF cpu_prf[PRF_SIZE];
 
-    int rename_table[REG_FILE_SIZE];
+    int rename_table[REG_FILE_SIZE];    /* Index: Regs || Value: Physical Regs */
     int free_reg_list[PRF_SIZE];
+    int free_reg_head;
+    int free_reg_tail;
 
     /* entry index of BTB */
     int btb_insert_at;
 
 } APEX_CPU;
 
+
+
+
 APEX_Instruction *create_code_memory(const char *filename, int *size);
 APEX_CPU *APEX_cpu_init(const char *filename);
 void APEX_cpu_run(APEX_CPU *cpu);
 void APEX_cpu_stop(APEX_CPU *cpu);
+void ns_print_stage_content(const char *name, const CPU_Stage *stage);
+void ns_print_reg_file(const APEX_CPU *cpu);
 #endif
