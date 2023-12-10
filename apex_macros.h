@@ -18,6 +18,12 @@
 /* Size of integer register file */
 #define REG_FILE_SIZE 16
 
+/* Function types */
+#define INTFU 1
+#define MULFU 2
+#define AFU   3
+#define BFU   4
+
 #define PRF_SIZE 25
 #define CPRF_SIZE 16
 #define IQ_SIZE 24
