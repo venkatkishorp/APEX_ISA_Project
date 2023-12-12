@@ -423,13 +423,13 @@ APEX_Decode(APEX_CPU *cpu)
             case OPCODE_LOAD:
             case OPCODE_MOVC:
             case OPCODE_JALR:
-            case OPCODE_LOADP:
             {
                 cpu->overwritten_pd = cpu->rename_table[cpu->decode_rename.rd];
                 cpu->decode_rename.pd = cpu->free_reg_list[cpu->free_reg_head];
+                printf("\n%d is being overwritten to %d\n", cpu->rename_table[cpu->decode_rename.rd], cpu->decode_rename.pd);
                 cpu->rename_table[cpu->decode_rename.rd] = cpu->decode_rename.pd;
                 cpu->free_reg_head = (cpu->free_reg_head + 1) % PRF_SIZE;
-                cpu->cpu_prf[cpu->decode_rename.rd].isValid = FALSE;
+                cpu->cpu_prf[cpu->decode_rename.pd].isValid = FALSE;
 
                 printf("\nRename Table: \n");
                 for (int i = 0; i < REG_FILE_SIZE; i++) {
@@ -441,6 +441,45 @@ APEX_Decode(APEX_CPU *cpu)
                     printf("%d\t", cpu->free_reg_list[i-1]);
                 }
                 printf("\n\n");
+
+                break;
+            }
+
+            case OPCODE_LOADP:
+            {
+                cpu->overwritten_pd = cpu->rename_table[cpu->decode_rename.rd];
+                cpu->decode_rename.pd = cpu->free_reg_list[cpu->free_reg_head];
+                cpu->rename_table[cpu->decode_rename.rd] = cpu->decode_rename.pd;
+                cpu->free_reg_head = (cpu->free_reg_head + 1) % PRF_SIZE;
+                cpu->cpu_prf[cpu->decode_rename.pd].isValid = FALSE;
+
+                cpu->decode_rename.lpsp_inc_dest = cpu->free_reg_list[cpu->free_reg_head];
+                cpu->rename_table[cpu->decode_rename.rs1] = cpu->decode_rename.lpsp_inc_dest;
+                cpu->free_reg_head = (cpu->free_reg_head + 1) % PRF_SIZE;
+                cpu->cpu_prf[cpu->decode_rename.lpsp_inc_dest].isValid = FALSE;
+
+                printf("\nRename Table: \n");
+                for (int i = 0; i < REG_FILE_SIZE; i++) {
+                    printf("%d => %d\n", i, cpu->rename_table[i]);
+                }
+                printf("\n\n");
+                printf("\nFree list of registers: \n");
+                for (int i = cpu->free_reg_head + 1; i != cpu->free_reg_tail; i = (i + 1)%PRF_SIZE) {
+                    printf("%d\t", cpu->free_reg_list[i-1]);
+                }
+                printf("\n\n");
+
+                break;
+            }
+
+            case OPCODE_STOREP:
+            {
+                cpu->decode_rename.lpsp_inc_dest = cpu->free_reg_list[cpu->free_reg_head];
+                cpu->rename_table[cpu->decode_rename.rs2] = cpu->decode_rename.lpsp_inc_dest;
+                cpu->free_reg_head = (cpu->free_reg_head + 1) % PRF_SIZE;
+                cpu->cpu_prf[cpu->decode_rename.lpsp_inc_dest].isValid = FALSE;
+
+                printf("\nlpsp_inc_dest = %d, %d\n", cpu->decode_rename.lpsp_inc_dest);
 
                 break;
             }
@@ -498,7 +537,6 @@ APEX_Dispatch(APEX_CPU *cpu)
             case OPCODE_OR:
             case OPCODE_XOR:
             case OPCODE_STORE:
-            case OPCODE_STOREP:
             case OPCODE_CMP:
             {
                 if (cpu->cpu_prf[cpu->rename_dispatch.ps1].isValid || 
@@ -522,13 +560,41 @@ APEX_Dispatch(APEX_CPU *cpu)
                 break;
             }
 
+            case OPCODE_STOREP:
+            {
+                // printf("\nSTOREP: ps1-valid: %d, broadcast = %d\n", cpu->cpu_prf[cpu->rename_dispatch.ps1].isValid, cpu->intFU_broadcasted_tag);
+                if (cpu->cpu_prf[cpu->rename_dispatch.ps1].isValid || 
+                    cpu->rename_dispatch.ps1 == cpu->intFU_broadcasted_tag || 
+                    cpu->rename_dispatch.ps1 == cpu->mulFU_broadcasted_tag) {
+                    cpu->godzilla.ps1_valid = TRUE;
+                }
+                else {
+                    cpu->godzilla.ps1_valid = FALSE;
+                }
+
+                if (cpu->cpu_prf[cpu->rename_dispatch.ps2].isValid || 
+                    cpu->rename_dispatch.ps2 == cpu->intFU_broadcasted_tag || 
+                    cpu->rename_dispatch.ps2 == cpu->mulFU_broadcasted_tag) {
+                    cpu->godzilla.ps2_valid = TRUE;
+                }
+                else {
+                    cpu->godzilla.ps2_valid = FALSE;
+                }
+
+                printf("\nlpsp_inc_dest in rename_dispatch = %d\n", cpu->rename_dispatch.lpsp_inc_dest);
+                cpu->godzilla.lpsp_inc_dest = cpu->rename_dispatch.lpsp_inc_dest;
+
+                break;
+            }
+
             case OPCODE_LOAD:
-            case OPCODE_LOADP:
             case OPCODE_ADDL:
             case OPCODE_SUBL:
             case OPCODE_CML:
             {
-                if (cpu->cpu_prf[cpu->rename_dispatch.ps1].isValid) {
+                if (cpu->cpu_prf[cpu->rename_dispatch.ps1].isValid || 
+                    cpu->rename_dispatch.ps1 == cpu->intFU_broadcasted_tag || 
+                    cpu->rename_dispatch.ps1 == cpu->mulFU_broadcasted_tag) {
                     cpu->godzilla.ps1_valid = TRUE;
                 }
                 else {
@@ -536,6 +602,24 @@ APEX_Dispatch(APEX_CPU *cpu)
                 }
 
                 cpu->godzilla.ps2_valid = TRUE;
+
+                break;
+            }
+
+            case OPCODE_LOADP:
+            {
+                if (cpu->cpu_prf[cpu->rename_dispatch.ps1].isValid || 
+                    cpu->rename_dispatch.ps1 == cpu->intFU_broadcasted_tag || 
+                    cpu->rename_dispatch.ps1 == cpu->mulFU_broadcasted_tag) {
+                    cpu->godzilla.ps1_valid = TRUE;
+                }
+                else {
+                    cpu->godzilla.ps1_valid = FALSE;
+                }
+
+                cpu->godzilla.ps2_valid = TRUE;
+
+                cpu->godzilla.lpsp_inc_dest = cpu->rename_dispatch.lpsp_inc_dest;
 
                 break;
             }
@@ -688,15 +772,28 @@ void setup_entry_in_rob(APEX_CPU *cpu) {
 This method is used to setup an entry in the IQ
 */
 void setup_entry_in_iq(APEX_CPU *cpu) {
-    // printf("Setting up entry in IQ");
+    // // printf("Setting up entry in IQ");
     for (int i = 0; i < IQ_SIZE; i++) {
         if (cpu->cpu_iq[i].isValid == FALSE) {
             cpu->cpu_iq[i].dest = cpu->godzilla.pd;
+            printf("\ngodzilla pd = %d\n", cpu->cpu_iq[i].dest);
             cpu->cpu_iq[i].literal = cpu->godzilla.imm;
             cpu->cpu_iq[i].ps1_tag = cpu->godzilla.ps1;
-            cpu->cpu_iq[i].ps1_valid = cpu->godzilla.ps1_valid;
+            if (cpu->cpu_prf[cpu->cpu_iq[i].ps1_tag].isValid) {
+                cpu->cpu_iq[i].ps1_valid = TRUE;
+            }
+            else {
+                cpu->cpu_iq[i].ps1_valid = cpu->godzilla.ps1_valid;
+            }
+            // cpu->cpu_iq[i].ps1_valid = cpu->godzilla.ps1_valid;
             cpu->cpu_iq[i].ps2_tag = cpu->godzilla.ps2;
-            cpu->cpu_iq[i].ps2_valid = cpu->godzilla.ps2_valid;
+            if (cpu->cpu_prf[cpu->cpu_iq[i].ps2_tag].isValid) {
+                cpu->cpu_iq[i].ps2_valid = TRUE;
+            }
+            else {
+                cpu->cpu_iq[i].ps2_valid = cpu->godzilla.ps2_valid;
+            }
+            // cpu->cpu_iq[i].ps2_valid = cpu->godzilla.ps2_valid;
             cpu->cpu_iq[i].clock_cycle_at_dispatch = cpu->clock;
             cpu->cpu_iq[i].function_type = cpu->godzilla.opcode;
 
@@ -712,15 +809,46 @@ void setup_entry_in_iq(APEX_CPU *cpu) {
                 cpu->godzilla.opcode == OPCODE_JALR) {
                     // Yet to implement for branch instructions
             }
-            else if (cpu->godzilla.opcode == OPCODE_LOAD || 
-                     cpu->godzilla.opcode == OPCODE_STORE || 
-                     cpu->godzilla.opcode == OPCODE_LOADP || 
-                     cpu->godzilla.opcode == OPCODE_STOREP) {
+            else if (cpu->godzilla.opcode == OPCODE_LOAD) {
                 cpu->cpu_iq[i].dest_type = dest_load_store;
                 cpu->cpu_iq[i].dest = cpu->godzilla.lsq_index;
                 cpu->cpu_iq[i].FU = ADD_FU;
+                cpu->cpu_iq[i].ps2_valid = TRUE;
                 
-                cpu->cpu_prf[cpu->godzilla.pd].lsq_dependency_list[cpu->lsq_tail - 1] = 1;
+                // cpu->cpu_prf[cpu->godzilla.ps1].lsq_dependency_list[cpu->lsq_tail - 1] = 1;
+                cpu->cpu_prf[cpu->godzilla.ps1].iq_dependency_list[i] = 1;
+                // cpu->cpu_prf[cpu->godzilla.ps2].iq_dependency_list[i] = 1;
+            }
+            else if (cpu->godzilla.opcode == OPCODE_STORE) {
+                cpu->cpu_iq[i].dest_type = dest_load_store;
+                cpu->cpu_iq[i].dest = cpu->godzilla.lsq_index;
+                cpu->cpu_iq[i].FU = ADD_FU;
+                cpu->cpu_iq[i].ps1_valid = TRUE;
+                
+                cpu->cpu_prf[cpu->godzilla.ps1].lsq_dependency_list[cpu->lsq_tail - 1] = 1;
+                // cpu->cpu_prf[cpu->godzilla.ps1].iq_dependency_list[i] = 1;
+                cpu->cpu_prf[cpu->godzilla.ps2].iq_dependency_list[i] = 1;
+            }
+            else if (cpu->godzilla.opcode == OPCODE_LOADP) {
+                cpu->cpu_iq[i].dest_type = dest_loadp_storep;
+                cpu->cpu_iq[i].dest = cpu->godzilla.lsq_index;
+                cpu->cpu_iq[i].FU = ADD_FU;
+                cpu->cpu_iq[i].lpsp_inc_dest = cpu->godzilla.lpsp_inc_dest;
+                printf("\nlpsp_inc_dest in godzilla = %d\n", cpu->cpu_iq[i].lpsp_inc_dest);
+                cpu->cpu_iq[i].ps2_valid = TRUE;
+                
+                cpu->cpu_prf[cpu->godzilla.ps1].iq_dependency_list[i] = 1;
+            }
+            else if (cpu->godzilla.opcode == OPCODE_STOREP) {
+                cpu->cpu_iq[i].dest_type = dest_loadp_storep;
+                cpu->cpu_iq[i].dest = cpu->godzilla.lsq_index;
+                cpu->cpu_iq[i].FU = ADD_FU;
+                cpu->cpu_iq[i].lpsp_inc_dest = cpu->godzilla.lpsp_inc_dest;
+                printf("\nlpsp_inc_dest in godzilla = %d\n", cpu->cpu_iq[i].lpsp_inc_dest);
+                cpu->cpu_iq[i].ps1_valid = TRUE;
+                
+                cpu->cpu_prf[cpu->godzilla.ps2].iq_dependency_list[i] = 1;
+                cpu->cpu_prf[cpu->godzilla.ps1].lsq_dependency_list[cpu->lsq_tail - 1] = 1;
             }
             else {
                 cpu->cpu_iq[i].dest = cpu->godzilla.pd;
@@ -748,6 +876,25 @@ void setup_entry_in_iq(APEX_CPU *cpu) {
                     {
                         cpu->cpu_prf[cpu->godzilla.ps1].iq_dependency_list[i] = 1;
                         cpu->cpu_iq[i].FU = INT_FU;
+
+                        break;
+                    }
+
+                    case OPCODE_LOAD:
+                    case OPCODE_LOADP:
+                    {
+                        cpu->cpu_prf[cpu->godzilla.ps1].iq_dependency_list[i] = 1;
+                        cpu->cpu_iq[i].FU = ADD_FU;
+
+                        break;
+                    }
+
+                    case OPCODE_STORE:
+                    case OPCODE_STOREP:
+                    {
+                        cpu->cpu_prf[cpu->godzilla.ps1].iq_dependency_list[i] = 1;
+                        cpu->cpu_prf[cpu->godzilla.ps2].iq_dependency_list[i] = 1;
+                        cpu->cpu_iq[i].FU = ADD_FU;
 
                         break;
                     }
@@ -781,46 +928,70 @@ void setup_entry_in_iq(APEX_CPU *cpu) {
 This method is used to wakeup instructions after tag broadcast
 */
 void wakeup_instructions (APEX_CPU *cpu, int tag) {
-    // printf("\nWaking up instructions\n");
+    // // printf("\nWaking up instructions\n");
 
     int clock_max_intfu = INT32_MAX;
     int clock_max_addfu = INT32_MAX;
     int clock_max_mulfu = INT32_MAX;
 
-    printf("\nBroadcasted tag: %d\n", tag);
+    // printf("\nBroadcasted tag: %d\n", tag);
     if (tag != -1) {
+        // for (int i = 0; i < IQ_SIZE; i++) {
+        //     if (cpu->cpu_prf[tag].iq_dependency_list[i] == 1) {
+        //         // printf("\nMul check: ps1[%d], ps2[%d], tag[%d]\n", cpu->cpu_iq[i].ps1_tag, cpu->cpu_iq[i].ps2_tag, tag);
+        //         printf("\nSTOREP: ps1-valid: %d, broadcast = %d\n", cpu->cpu_prf[cpu->cpu_iq[i].ps1_tag].isValid, tag);
+        //         if (cpu->cpu_iq[i].ps1_tag == tag) {
+        //             cpu->cpu_iq[i].ps1_valid = TRUE;
+        //         }
+
+        //         if (cpu->cpu_iq[i].ps2_tag == tag) {
+        //             cpu->cpu_iq[i].ps2_valid = TRUE;
+        //         }
+        //     }
+        // }
+
+        printf("\nBroadcasted tag = %d\n", tag);
         for (int i = 0; i < IQ_SIZE; i++) {
-            if (cpu->cpu_prf[tag].iq_dependency_list[i] == 1) {
-                printf("\nMul check: ps1[%d], ps2[%d], tag[%d]\n", cpu->cpu_iq[i].ps1_tag, cpu->cpu_iq[i].ps2_tag, tag);
+            // printf("\nis valid = %d for %d\n", cpu->cpu_iq[i].isValid, i);
+            if (cpu->cpu_iq[i].isValid) {
+                printf("\nIQ check: ps1 = %d, tag = %d\n", cpu->cpu_iq[i].ps1_tag, tag);
                 if (cpu->cpu_iq[i].ps1_tag == tag) {
                     cpu->cpu_iq[i].ps1_valid = TRUE;
                 }
+                printf("\nIQ check: ps2 = %d, tag = %d\n", cpu->cpu_iq[i].ps2_tag, tag);
                 if (cpu->cpu_iq[i].ps2_tag == tag) {
                     cpu->cpu_iq[i].ps2_valid = TRUE;
                 }
+            }
+        }
+
+        for (int i = cpu->lsq_head; i != cpu->lsq_tail; i = (i + 1) % LSQ_SIZE) {
+            // printf("\nSTOREP: ps1-valid: %d, broadcast = %d\n", cpu->cpu_prf[cpu->cpu_iq[i].ps1_tag].isValid, cpu->intFU_broadcasted_tag);
+            if (cpu->cpu_lsq[i].ps1_tag == tag) {
+                cpu->cpu_lsq[i].ps1_valid = TRUE;
             }
         }
     }
 
     for (int i = 0; i < IQ_SIZE; i++) {
         if (cpu->cpu_iq[i].isValid && cpu->cpu_iq[i].FU == INT_FU) {
-            if (cpu->cpu_iq[i].ps1_valid && cpu->cpu_iq[i].ps2_valid) {
+            if (cpu->cpu_iq[i].ps1_valid && cpu->cpu_iq[i].ps2_valid && cpu->execute.intFU.has_insn == FALSE) {
                 if (cpu->cpu_iq[i].clock_cycle_at_dispatch < clock_max_intfu) {
                     clock_max_intfu = cpu->cpu_iq[i].clock_cycle_at_dispatch;
 
                     cpu->godzilla.intfu_ready_insn = i;
 
-                    // printf("\ninsn woken up: iq[%d]\n", i);
+                    // // printf("\ninsn woken up: iq[%d]\n", i);
                 }
             }
         }
     }
 
-    printf("\nintfu_ready_insn: %d\n", cpu->godzilla.intfu_ready_insn);
+    // printf("\nintfu_ready_insn: %d\n", cpu->godzilla.intfu_ready_insn);
 
     for (int i = 0; i < IQ_SIZE; i++) {
         if (cpu->cpu_iq[i].isValid && cpu->cpu_iq[i].FU == ADD_FU) {
-            if (cpu->cpu_iq[i].ps1_valid) {
+            if (cpu->cpu_iq[i].ps1_valid && cpu->cpu_iq[i].ps2_valid && cpu->execute.addFU.has_insn == FALSE) {
                 if (cpu->cpu_iq[i].clock_cycle_at_dispatch < clock_max_addfu) {
                     clock_max_addfu = cpu->cpu_iq[i].clock_cycle_at_dispatch;
 
@@ -832,11 +1003,13 @@ void wakeup_instructions (APEX_CPU *cpu, int tag) {
 
     for (int i = 0; i < IQ_SIZE; i++) {
         if (cpu->cpu_iq[i].isValid && cpu->cpu_iq[i].FU == MUL_FU) {
-            if (cpu->cpu_iq[i].ps1_valid && cpu->cpu_iq[i].ps2_valid) {
+            if (cpu->cpu_iq[i].ps1_valid && cpu->cpu_iq[i].ps2_valid && cpu->execute.mulFU.has_insn == FALSE) {
                 if (cpu->cpu_iq[i].clock_cycle_at_dispatch < clock_max_mulfu) {
                     clock_max_mulfu = cpu->cpu_iq[i].clock_cycle_at_dispatch;
 
                     cpu->godzilla.mulfu_ready_insn = i;
+
+                    // printf("\nPicked MUL insn: %d\n", i);
                 }
             }
         }
@@ -872,8 +1045,13 @@ void wakeup_instructions (APEX_CPU *cpu, int tag) {
     // }
 
     for (int i = 0; i < LSQ_SIZE; i++) {
-        if (cpu->cpu_prf[tag].lsq_dependency_list[i] == 1) {
-            cpu->godzilla.lsq_target = i;
+        if (cpu->cpu_lsq[tag].mem_valid == TRUE) {
+            if (cpu->cpu_lsq[tag].lORs == 0 && cpu->cpu_lsq[tag].ps2_valid == TRUE) {
+                cpu->godzilla.lsq_target = i;
+            }
+            else if (cpu->cpu_lsq[tag].lORs == 1) {
+                cpu->godzilla.lsq_target = i;
+            }
         }
     }
 }
@@ -882,7 +1060,7 @@ void wakeup_instructions (APEX_CPU *cpu, int tag) {
 This method is used to broadcast the tags of Integer and Address Function Units
 */
 void broadcast_tags (APEX_CPU *cpu) {
-    // printf("\nBroadcasting tags\n");
+    // // printf("\nBroadcasting tags\n");
 
     if (cpu->execute.intFU.has_insn) {
         cpu->intFU_broadcasted_tag = cpu->execute.intFU.pd;
@@ -931,6 +1109,11 @@ void perform_load_store (APEX_CPU *cpu) {
                         cpu->free_reg_tail = (cpu->free_reg_tail + 1) % PRF_SIZE;
                     }
 
+                    if (cpu->godzilla.mem_insn_reg_updt.dest != -1) {
+                        cpu->regs[cpu->godzilla.mem_insn_reg_updt.dest] = cpu->cpu_prf[cpu->godzilla.mem_insn_reg_updt.incr_dest].value;
+                        cpu->godzilla.mem_insn_reg_updt.dest = -1;
+                    }
+
                     cpu->cpu_rob[cpu->rob_head].isValid = FALSE;
                     cpu->rob_head = (cpu->rob_head + 1) % ROB_SIZE;
                 }
@@ -953,8 +1136,17 @@ void perform_load_store (APEX_CPU *cpu) {
                     cpu->free_reg_tail = (cpu->free_reg_tail + 1) % PRF_SIZE;
                 }
 
+                cpu->regs[cpu->cpu_rob[cpu->rob_head].rd] = cpu->cpu_prf[cpu->cpu_lsq[cpu->lsq_head].pd].value;
+                if (cpu->godzilla.mem_insn_reg_updt.dest != -1) {
+                    cpu->regs[cpu->godzilla.mem_insn_reg_updt.dest] = cpu->cpu_prf[cpu->godzilla.mem_insn_reg_updt.incr_dest].value;
+                    cpu->godzilla.mem_insn_reg_updt.dest = -1;
+                }
+
                 cpu->cpu_rob[cpu->rob_head].isValid = FALSE;
                 cpu->rob_head = (cpu->rob_head + 1) % ROB_SIZE;
+
+                printf("\nmem[%d]=%d => p[%d] = %d\n", cpu->cpu_lsq[cpu->lsq_head].memory, cpu->cpu_prf[cpu->cpu_lsq[cpu->lsq_head].pd].value, cpu->cpu_lsq[cpu->lsq_head].pd, cpu->cpu_prf[cpu->cpu_lsq[cpu->lsq_head].pd].value);
+                wakeup_instructions(cpu, cpu->cpu_lsq[cpu->lsq_head].pd);
             }
         }
     }
@@ -995,9 +1187,17 @@ APEX_Godzilla(APEX_CPU *cpu) {
             setup_entry_in_iq(cpu);
         }
 
-        // printf("\nInstruction woken is: iq[%d]\n", cpu->godzilla.intfu_ready_insn);
-        printf("\nINTFU: Instruction ready to go: %d\n", cpu->godzilla.intfu_ready_insn);
-        printf("\nMULFU: Instruction ready to go: %d\n", cpu->godzilla.mulfu_ready_insn);
+        // // printf("\nInstruction woken is: iq[%d]\n", cpu->godzilla.intfu_ready_insn);
+        // printf("\nINTFU: Instruction ready to go: %d\n", cpu->godzilla.intfu_ready_insn);
+        // printf("\nMULFU: Instruction ready to go: %d\n", cpu->godzilla.mulfu_ready_insn);
+
+        wakeup_instructions(cpu, cpu->intFU_broadcasted_tag);
+
+        if (cpu->execute.addFU.opcode == OPCODE_LOADP || cpu->execute.addFU.opcode == OPCODE_STOREP) {
+            printf("\nWaking after loadp/storep: %d\n", cpu->execute.addFU.lpsp_inc_dest);
+            wakeup_instructions(cpu, cpu->execute.addFU.lpsp_inc_dest);
+        }
+        // wakeup_instructions(cpu, cpu->addFU_broadcasted_tag);
 
         if (cpu->godzilla.intfu_ready_insn != -1) {
             if (cpu->cpu_iq[cpu->godzilla.intfu_ready_insn].function_type == OPCODE_HALT) {
@@ -1022,6 +1222,9 @@ APEX_Godzilla(APEX_CPU *cpu) {
                     cpu->execute.intFU.ps1_value = cpu->mulFU_broadcasted_value;
                     cpu->cpu_iq[cpu->godzilla.intfu_ready_insn].ps1_valid = 1;
                     cpu->execute.intFU.ps1 = cpu->cpu_iq[cpu->godzilla.intfu_ready_insn].ps1_tag;
+                    cpu->execute.intFU.forwarded_from_mul = 1;
+
+                    // printf("\nMUL forwarded to INT: pd[%d], ps1[%d]:%d, ps2[%d]:%d\n", cpu->execute.intFU.pd, cpu->execute.intFU.ps1, cpu->execute.intFU.ps1_value, cpu->execute.intFU.ps2, cpu->execute.intFU.ps2_value);
 
                     cpu->cpu_prf[cpu->cpu_iq[cpu->godzilla.intfu_ready_insn].ps1_tag].iq_dependency_list[cpu->cpu_iq[cpu->godzilla.intfu_ready_insn].ps1_tag] = 0;
                 }
@@ -1043,6 +1246,7 @@ APEX_Godzilla(APEX_CPU *cpu) {
                     cpu->execute.intFU.ps2_value = cpu->mulFU_broadcasted_value;
                     cpu->cpu_iq[cpu->godzilla.intfu_ready_insn].ps2_valid = 1;
                     cpu->execute.intFU.ps2 = cpu->cpu_iq[cpu->godzilla.intfu_ready_insn].ps2_tag;
+                    cpu->execute.intFU.forwarded_from_mul = 2;
 
                     cpu->cpu_prf[cpu->cpu_iq[cpu->godzilla.intfu_ready_insn].ps2_tag].iq_dependency_list[cpu->cpu_iq[cpu->godzilla.intfu_ready_insn].ps2_tag] = 0;
                 }
@@ -1070,38 +1274,65 @@ APEX_Godzilla(APEX_CPU *cpu) {
                 cpu->execute.intFU.imm = cpu->cpu_iq[cpu->godzilla.intfu_ready_insn].literal;
                 cpu->execute.intFU.opcode = cpu->cpu_iq[cpu->godzilla.intfu_ready_insn].function_type;
 
-                printf("\npd[%d] = ps1[%d], ps2[%d], imm[%d]\n", cpu->execute.intFU.pd, cpu->execute.intFU.ps1, cpu->execute.intFU.ps2, cpu->execute.intFU.imm);
+                // printf("\npd[%d] = ps1[%d], ps2[%d], imm[%d]\n", cpu->execute.intFU.pd, cpu->execute.intFU.ps1, cpu->execute.intFU.ps2, cpu->execute.intFU.imm);
 
                 cpu->cpu_iq[cpu->godzilla.intfu_ready_insn].isValid = FALSE;
                 cpu->godzilla.intfu_ready_insn = -1;
             }
-            // printf("\nexecute: pd: %d, ps1: %d, ps2: %d\n", cpu->execute.intFU.pd, cpu->execute.intFU.ps1, cpu->execute.intFU.ps2);
+            // // printf("\nexecute: pd: %d, ps1: %d, ps2: %d\n", cpu->execute.intFU.pd, cpu->execute.intFU.ps1, cpu->execute.intFU.ps2);
         }
 
         if (cpu->godzilla.addfu_ready_insn != -1) {
             cpu->execute.addFU.has_insn = TRUE;
 
             cpu->execute.addFU.pd = cpu->cpu_iq[cpu->godzilla.addfu_ready_insn].dest;
+            cpu->execute.addFU.lpsp_inc_dest = cpu->cpu_iq[cpu->godzilla.addfu_ready_insn].lpsp_inc_dest;
             
-            if (cpu->intFU_broadcasted_tag == cpu->cpu_iq[cpu->godzilla.addfu_ready_insn].ps1_tag) {
-                cpu->execute.addFU.ps1_value = cpu->intFU_broadcasted_value;
-                cpu->cpu_iq[cpu->godzilla.addfu_ready_insn].ps1_valid = 1;
-                cpu->execute.intFU.ps1 = cpu->cpu_iq[cpu->godzilla.intfu_ready_insn].ps1_tag;
+            if (cpu->cpu_iq[cpu->godzilla.addfu_ready_insn].function_type == OPCODE_LOAD || cpu->cpu_iq[cpu->godzilla.addfu_ready_insn].function_type == OPCODE_LOADP) {
+                if (cpu->intFU_broadcasted_tag == cpu->cpu_iq[cpu->godzilla.addfu_ready_insn].ps1_tag) {
+                    cpu->execute.addFU.ps1_value = cpu->intFU_broadcasted_value;
+                    cpu->cpu_iq[cpu->godzilla.addfu_ready_insn].ps1_valid = 1;
+                    cpu->execute.addFU.ps1 = cpu->cpu_iq[cpu->godzilla.addfu_ready_insn].ps1_tag;
 
-                cpu->cpu_prf[cpu->cpu_iq[cpu->godzilla.intfu_ready_insn].ps1_tag].iq_dependency_list[cpu->cpu_iq[cpu->godzilla.intfu_ready_insn].ps1_tag] = 0;
-            }
-            else if (cpu->mulFU_broadcasted_tag == cpu->cpu_iq[cpu->godzilla.addfu_ready_insn].ps1_tag) {
-                cpu->execute.addFU.ps1_value = cpu->mulFU_broadcasted_value;
-                cpu->cpu_iq[cpu->godzilla.addfu_ready_insn].ps1_valid = 1;
-                cpu->execute.intFU.ps1 = cpu->cpu_iq[cpu->godzilla.intfu_ready_insn].ps1_tag;
+                    cpu->cpu_prf[cpu->cpu_iq[cpu->godzilla.addfu_ready_insn].ps1_tag].iq_dependency_list[cpu->cpu_iq[cpu->godzilla.addfu_ready_insn].ps1_tag] = 0;
+                }
+                else if (cpu->mulFU_broadcasted_tag == cpu->cpu_iq[cpu->godzilla.addfu_ready_insn].ps1_tag) {
+                    cpu->execute.addFU.ps1_value = cpu->mulFU_broadcasted_value;
+                    cpu->cpu_iq[cpu->godzilla.addfu_ready_insn].ps1_valid = 1;
+                    cpu->execute.addFU.ps1 = cpu->cpu_iq[cpu->godzilla.addfu_ready_insn].ps1_tag;
+                    cpu->execute.addFU.forwarded_from_mul = 1;
 
-                cpu->cpu_prf[cpu->cpu_iq[cpu->godzilla.intfu_ready_insn].ps1_tag].iq_dependency_list[cpu->cpu_iq[cpu->godzilla.intfu_ready_insn].ps1_tag] = 0;
+                    cpu->cpu_prf[cpu->cpu_iq[cpu->godzilla.addfu_ready_insn].ps1_tag].iq_dependency_list[cpu->cpu_iq[cpu->godzilla.addfu_ready_insn].ps1_tag] = 0;
+                }
+                else {
+                    cpu->execute.addFU.ps1 = cpu->cpu_iq[cpu->godzilla.addfu_ready_insn].ps1_tag;
+                    cpu->execute.addFU.ps1_value = cpu->cpu_prf[cpu->cpu_iq[cpu->godzilla.addfu_ready_insn].ps1_tag].value;
+
+                    cpu->cpu_prf[cpu->cpu_iq[cpu->godzilla.addfu_ready_insn].ps1_tag].iq_dependency_list[cpu->cpu_iq[cpu->godzilla.addfu_ready_insn].ps1_tag] = 0;
+                }
             }
             else {
-                cpu->execute.intFU.ps1 = cpu->cpu_iq[cpu->godzilla.intfu_ready_insn].ps1_tag;
-                cpu->execute.intFU.ps1_value = cpu->cpu_prf[cpu->cpu_iq[cpu->godzilla.intfu_ready_insn].ps1_tag].value;
+                if (cpu->intFU_broadcasted_tag == cpu->cpu_iq[cpu->godzilla.addfu_ready_insn].ps2_tag) {
+                    cpu->execute.addFU.ps2_value = cpu->intFU_broadcasted_value;
+                    cpu->cpu_iq[cpu->godzilla.addfu_ready_insn].ps2_valid = 1;
+                    cpu->execute.addFU.ps2 = cpu->cpu_iq[cpu->godzilla.addfu_ready_insn].ps2_tag;
 
-                cpu->cpu_prf[cpu->cpu_iq[cpu->godzilla.intfu_ready_insn].ps1_tag].iq_dependency_list[cpu->cpu_iq[cpu->godzilla.intfu_ready_insn].ps1_tag] = 0;
+                    cpu->cpu_prf[cpu->cpu_iq[cpu->godzilla.addfu_ready_insn].ps2_tag].iq_dependency_list[cpu->cpu_iq[cpu->godzilla.addfu_ready_insn].ps2_tag] = 0;
+                }
+                else if (cpu->mulFU_broadcasted_tag == cpu->cpu_iq[cpu->godzilla.addfu_ready_insn].ps2_tag) {
+                    cpu->execute.addFU.ps2_value = cpu->mulFU_broadcasted_value;
+                    cpu->cpu_iq[cpu->godzilla.addfu_ready_insn].ps2_valid = 1;
+                    cpu->execute.addFU.ps2 = cpu->cpu_iq[cpu->godzilla.addfu_ready_insn].ps2_tag;
+                    cpu->execute.addFU.forwarded_from_mul = 1;
+
+                    cpu->cpu_prf[cpu->cpu_iq[cpu->godzilla.addfu_ready_insn].ps2_tag].iq_dependency_list[cpu->cpu_iq[cpu->godzilla.addfu_ready_insn].ps2_tag] = 0;
+                }
+                else {
+                    cpu->execute.addFU.ps2 = cpu->cpu_iq[cpu->godzilla.addfu_ready_insn].ps2_tag;
+                    cpu->execute.addFU.ps2_value = cpu->cpu_prf[cpu->cpu_iq[cpu->godzilla.addfu_ready_insn].ps2_tag].value;
+
+                    cpu->cpu_prf[cpu->cpu_iq[cpu->godzilla.addfu_ready_insn].ps2_tag].iq_dependency_list[cpu->cpu_iq[cpu->godzilla.addfu_ready_insn].ps2_tag] = 0;
+                }
             }
 
             // if (cpu->intFU_broadcasted_tag != cpu->cpu_iq[cpu->godzilla.intfu_ready_insn].ps1_tag &&
@@ -1113,12 +1344,12 @@ APEX_Godzilla(APEX_CPU *cpu) {
             // }
 
             cpu->execute.addFU.imm = cpu->cpu_iq[cpu->godzilla.addfu_ready_insn].literal;
-            cpu->execute.intFU.opcode = cpu->cpu_iq[cpu->godzilla.intfu_ready_insn].function_type;
+            cpu->execute.addFU.opcode = cpu->cpu_iq[cpu->godzilla.addfu_ready_insn].function_type;
 
             cpu->cpu_iq[cpu->godzilla.addfu_ready_insn].isValid = FALSE;
             cpu->godzilla.addfu_ready_insn = -1;
 
-            // printf("\nexecute: pd: %d, ps1: %d\n", cpu->execute.addFU.pd, cpu->execute.addFU.ps1);
+            // // printf("\nexecute: pd: %d, ps1: %d\n", cpu->execute.addFU.pd, cpu->execute.addFU.ps1);
         }
 
         if (cpu->godzilla.mulfu_ready_insn != -1) {
@@ -1130,10 +1361,11 @@ APEX_Godzilla(APEX_CPU *cpu) {
                 cpu->execute.mulFU.ps1_value = cpu->mulFU_broadcasted_value;
                 cpu->cpu_iq[cpu->godzilla.mulfu_ready_insn].ps1_valid = 1;
                 cpu->execute.mulFU.ps1 = cpu->cpu_iq[cpu->godzilla.mulfu_ready_insn].ps1_tag;
+                cpu->execute.mulFU.forwarded_from_mul = 1;
 
                 cpu->cpu_prf[cpu->cpu_iq[cpu->godzilla.mulfu_ready_insn].ps1_tag].iq_dependency_list[cpu->cpu_iq[cpu->godzilla.mulfu_ready_insn].ps1_tag] = 0;
 
-                printf("\n1. Mul insn being sent: pd[%d], ps1[%d], ps2[%d]\n", cpu->execute.mulFU.pd, cpu->execute.mulFU.ps1, cpu->execute.mulFU.ps2);
+                // printf("\n1. Mul insn being sent: pd[%d], ps1[%d], ps2[%d]\n", cpu->execute.mulFU.pd, cpu->execute.mulFU.ps1, cpu->execute.mulFU.ps2);
             }
             else if (cpu->intFU_broadcasted_tag == cpu->cpu_iq[cpu->godzilla.mulfu_ready_insn].ps1_tag) {
                 cpu->execute.mulFU.ps1_value = cpu->intFU_broadcasted_value;
@@ -1142,7 +1374,7 @@ APEX_Godzilla(APEX_CPU *cpu) {
 
                 cpu->cpu_prf[cpu->cpu_iq[cpu->godzilla.mulfu_ready_insn].ps1_tag].iq_dependency_list[cpu->cpu_iq[cpu->godzilla.mulfu_ready_insn].ps1_tag] = 0;
 
-                printf("\n2. Mul insn being sent: pd[%d], ps1[%d], ps2[%d]\n", cpu->execute.mulFU.pd, cpu->execute.mulFU.ps1, cpu->execute.mulFU.ps2);
+                // printf("\n2. Mul insn being sent: pd[%d], ps1[%d], ps2[%d]\n", cpu->execute.mulFU.pd, cpu->execute.mulFU.ps1, cpu->execute.mulFU.ps2);
             }
             else {
                 cpu->execute.mulFU.ps1 = cpu->cpu_iq[cpu->godzilla.mulfu_ready_insn].ps1_tag;
@@ -1151,17 +1383,18 @@ APEX_Godzilla(APEX_CPU *cpu) {
 
                 cpu->cpu_prf[cpu->cpu_iq[cpu->godzilla.mulfu_ready_insn].ps1_tag].iq_dependency_list[cpu->cpu_iq[cpu->godzilla.mulfu_ready_insn].ps1_tag] = 0;
 
-                printf("\n3. Mul insn being sent: pd[%d], ps1[%d], ps2[%d]\n", cpu->execute.mulFU.pd, cpu->execute.mulFU.ps1, cpu->execute.mulFU.ps2);
+                // printf("\n3. Mul insn being sent: pd[%d], ps1[%d]: %d, ps2[%d]: %d\n", cpu->execute.mulFU.pd, cpu->execute.mulFU.ps1, cpu->execute.mulFU.ps1_value, cpu->execute.mulFU.ps2, cpu->execute.mulFU.ps2_value);
             }
 
             if (cpu->mulFU_broadcasted_tag == cpu->cpu_iq[cpu->godzilla.mulfu_ready_insn].ps2_tag) {
                 cpu->execute.mulFU.ps2_value = cpu->mulFU_broadcasted_value;
                 cpu->cpu_iq[cpu->godzilla.mulfu_ready_insn].ps2_valid = 1;
                 cpu->execute.mulFU.ps2 = cpu->cpu_iq[cpu->godzilla.mulfu_ready_insn].ps2_tag;
+                cpu->execute.mulFU.forwarded_from_mul = 2;
 
                 cpu->cpu_prf[cpu->cpu_iq[cpu->godzilla.mulfu_ready_insn].ps2_tag].iq_dependency_list[cpu->cpu_iq[cpu->godzilla.mulfu_ready_insn].ps2_tag] = 0;
 
-                printf("\n4. Mul insn being sent: pd[%d], ps1[%d], ps2[%d]\n", cpu->execute.mulFU.pd, cpu->execute.mulFU.ps1, cpu->execute.mulFU.ps2);
+                // printf("\n4. Mul insn being sent: pd[%d], ps1[%d], ps2[%d]\n", cpu->execute.mulFU.pd, cpu->execute.mulFU.ps1, cpu->execute.mulFU.ps2);
             }
             else if (cpu->intFU_broadcasted_tag == cpu->cpu_iq[cpu->godzilla.mulfu_ready_insn].ps2_tag) {
                 cpu->execute.mulFU.ps2_value = cpu->intFU_broadcasted_value;
@@ -1170,8 +1403,8 @@ APEX_Godzilla(APEX_CPU *cpu) {
 
                 cpu->cpu_prf[cpu->cpu_iq[cpu->godzilla.mulfu_ready_insn].ps2_tag].iq_dependency_list[cpu->cpu_iq[cpu->godzilla.mulfu_ready_insn].ps2_tag] = 0;
 
-                printf("\n5. Mul insn being sent: pd[%d], ps1[%d], ps2[%d]\n", cpu->execute.mulFU.pd, cpu->execute.mulFU.ps1, cpu->execute.mulFU.ps2);
-            }
+                // printf("\n5. Mul insn being sent: pd[%d], ps1[%d]: %d, ps2[%d]: %d\n", cpu->execute.mulFU.pd, cpu->execute.mulFU.ps1, cpu->execute.mulFU.ps1_value, cpu->execute.mulFU.ps2, cpu->execute.mulFU.ps2_value);            
+                }
             else {
                 cpu->execute.mulFU.ps2 = cpu->cpu_iq[cpu->godzilla.mulfu_ready_insn].ps2_tag;
                 cpu->execute.mulFU.ps2_value = cpu->cpu_prf[cpu->cpu_iq[cpu->godzilla.mulfu_ready_insn].ps2_tag].value;
@@ -1179,7 +1412,7 @@ APEX_Godzilla(APEX_CPU *cpu) {
 
                 cpu->cpu_prf[cpu->cpu_iq[cpu->godzilla.mulfu_ready_insn].ps2_tag].iq_dependency_list[cpu->cpu_iq[cpu->godzilla.mulfu_ready_insn].ps2_tag] = 0;
 
-                printf("\n6. Mul insn being sent: pd[%d], ps1[%d], ps2[%d]\n", cpu->execute.mulFU.pd, cpu->execute.mulFU.ps1, cpu->execute.mulFU.ps2);
+                // printf("\n6. Mul insn being sent: pd[%d], ps1[%d], ps2[%d]\n", cpu->execute.mulFU.pd, cpu->execute.mulFU.ps1, cpu->execute.mulFU.ps2);
             }
 
             // if (cpu->intFU_broadcasted_tag != cpu->cpu_iq[cpu->godzilla.mulfu_ready_insn].ps1_tag &&
@@ -1194,36 +1427,36 @@ APEX_Godzilla(APEX_CPU *cpu) {
             //     cpu->cpu_prf[cpu->cpu_iq[cpu->godzilla.mulfu_ready_insn].ps1_tag].iq_dependency_list[cpu->cpu_iq[cpu->godzilla.mulfu_ready_insn].ps1_tag] = 0;
             //     cpu->cpu_prf[cpu->cpu_iq[cpu->godzilla.mulfu_ready_insn].ps2_tag].iq_dependency_list[cpu->cpu_iq[cpu->godzilla.mulfu_ready_insn].ps2_tag] = 0;
 
-            //     printf("\n5. Mul insn being sent: pd[%d], ps1[%d], ps2[%d]\n", cpu->execute.mulFU.pd, cpu->execute.mulFU.ps1, cpu->execute.mulFU.ps2);
+            //     // printf("\n5. Mul insn being sent: pd[%d], ps1[%d], ps2[%d]\n", cpu->execute.mulFU.pd, cpu->execute.mulFU.ps1, cpu->execute.mulFU.ps2);
             // }
 
             cpu->cpu_iq[cpu->godzilla.mulfu_ready_insn].isValid = FALSE;
             cpu->execute.mulFU.opcode = cpu->cpu_iq[cpu->godzilla.mulfu_ready_insn].function_type;
             cpu->godzilla.mulfu_ready_insn = -1;
 
-            // printf("\nexecute: pd: %d, ps1: %d, ps2: %d\n", cpu->execute.mulFU.pd, cpu->execute.mulFU.ps1, cpu->execute.mulFU.ps2);
+            // // printf("\nexecute: pd: %d, ps1: %d, ps2: %d\n", cpu->execute.mulFU.pd, cpu->execute.mulFU.ps1, cpu->execute.mulFU.ps2);
         }
 
-        if (cpu->godzilla.lsq_target != -1) {
-            cpu->cpu_lsq[cpu->godzilla.lsq_target].memory = cpu->addFU_broadcasted_value;
-            cpu->cpu_lsq[cpu->godzilla.lsq_target].mem_valid = TRUE;
+        if (cpu->addFU_broadcasted_tag != -1) {
+            cpu->cpu_lsq[cpu->addFU_broadcasted_tag].memory = cpu->addFU_broadcasted_value;
+            cpu->cpu_lsq[cpu->addFU_broadcasted_tag].mem_valid = TRUE;
 
-            cpu->godzilla.lsq_target = -1;
+            cpu->addFU_broadcasted_tag = -1;
         }
 
-        printf("\nBroadcasted tag is: %d[%d] -> value is: %d\n", cpu->intFU_broadcasted_tag, cpu->cpu_prf[cpu->intFU_broadcasted_tag].isValid, cpu->intFU_broadcasted_value);
+        // printf("\nBroadcasted tag is: %d[%d] -> value is: %d\n", cpu->intFU_broadcasted_tag, cpu->cpu_prf[cpu->intFU_broadcasted_tag].isValid, cpu->intFU_broadcasted_value);
         if (cpu->intFU_broadcasted_tag != -1) {
             cpu->cpu_prf[cpu->intFU_broadcasted_tag].isValid = TRUE;
             cpu->cpu_prf[cpu->intFU_broadcasted_tag].value = cpu->intFU_broadcasted_value;
 
-            // printf("\nUpdated prf: prf[%d[%d]] = %d\n", cpu->intFU_broadcasted_tag, cpu->cpu_prf[cpu->intFU_broadcasted_tag].isValid, cpu->cpu_prf[cpu->intFU_broadcasted_tag].value);
+            // // printf("\nUpdated prf: prf[%d[%d]] = %d\n", cpu->intFU_broadcasted_tag, cpu->cpu_prf[cpu->intFU_broadcasted_tag].isValid, cpu->cpu_prf[cpu->intFU_broadcasted_tag].value);
         }
         if (cpu->mulFU_broadcasted_tag != -1 && cpu->execute.mulFU_clock == 0) {
             cpu->cpu_prf[cpu->mulFU_broadcasted_tag].isValid = TRUE;
             cpu->cpu_prf[cpu->mulFU_broadcasted_tag].value = cpu->mulFU_broadcasted_value;
         }
 
-        if (cpu->cpu_rob[cpu->rob_head].insn_type == dest_load_store) {
+        if (cpu->cpu_rob[cpu->rob_head].insn_type == dest_load_store || cpu->cpu_rob[cpu->rob_head].insn_type == dest_loadp_storep) {
             perform_load_store(cpu);
         }
         else if (cpu->cpu_rob[cpu->rob_head].insn_type == dest_halt) {
@@ -1234,11 +1467,11 @@ APEX_Godzilla(APEX_CPU *cpu) {
             }
         }
         else {
-            printf("\nChecking if rob head is ready to commit: %d == %d\n", cpu->cpu_rob[cpu->rob_head].pd, cpu->cpu_prf[cpu->cpu_rob[cpu->rob_head].pd].isValid);
+            // printf("\nChecking if rob head is ready to commit: %d == %d\n", cpu->cpu_rob[cpu->rob_head].pd, cpu->cpu_prf[cpu->cpu_rob[cpu->rob_head].pd].isValid);
             if (cpu->cpu_prf[cpu->cpu_rob[cpu->rob_head].pd].isValid == TRUE) {
                 cpu->regs[cpu->cpu_rob[cpu->rob_head].rd] = cpu->cpu_prf[cpu->cpu_rob[cpu->rob_head].pd].value;
 
-                printf("\nPutting %d into reg\n", cpu->cpu_prf[cpu->cpu_rob[cpu->rob_head].pd].value);
+                // printf("\nPutting %d into reg\n", cpu->cpu_prf[cpu->cpu_rob[cpu->rob_head].pd].value);
 
                 if (cpu->cpu_rob[cpu->rob_head].overwritten_pd != -1) {
                     cpu->free_reg_list[cpu->free_reg_tail] = cpu->cpu_rob[cpu->rob_head].overwritten_pd;
@@ -1248,7 +1481,7 @@ APEX_Godzilla(APEX_CPU *cpu) {
                 cpu->cpu_rob[cpu->rob_head].isValid = FALSE;
                 cpu->rob_head = (cpu->rob_head + 1) % ROB_SIZE;
 
-                printf("\nReg updated is: %d: %d\n", cpu->cpu_rob[cpu->rob_head-1].rd, cpu->regs[cpu->cpu_rob[cpu->rob_head-1].rd]);
+                // printf("\nReg updated is: %d: %d\n", cpu->cpu_rob[cpu->rob_head-1].rd, cpu->regs[cpu->cpu_rob[cpu->rob_head-1].rd]);
             }
             // else if (cpu->cpu_rob[cpu->rob_head].pd == cpu->intFU_broadcasted_tag) {
             //     cpu->regs[cpu->cpu_rob[cpu->rob_head].rd] = cpu->intFU_broadcasted_value;
@@ -1275,7 +1508,7 @@ APEX_Godzilla(APEX_CPU *cpu) {
         }
 
         if (cpu->intFU_broadcasted_tag != -1) {
-            printf("\nUpdated prf: prf[%d[%d]] = %d\n", cpu->intFU_broadcasted_tag, cpu->cpu_prf[cpu->intFU_broadcasted_tag].isValid, cpu->cpu_prf[cpu->intFU_broadcasted_tag].value);
+            // printf("\nUpdated prf: prf[%d[%d]] = %d\n", cpu->intFU_broadcasted_tag, cpu->cpu_prf[cpu->intFU_broadcasted_tag].isValid, cpu->cpu_prf[cpu->intFU_broadcasted_tag].value);
         }
 
         cpu->intFU_broadcasted_tag = -1;
@@ -1284,8 +1517,8 @@ APEX_Godzilla(APEX_CPU *cpu) {
 
         should_dispatch_stall(cpu);
 
-        printf("\nExecute.has_insn before broadcast: %d for pd[%d]\n", cpu->execute.intFU.has_insn, cpu->execute.intFU.pd);
-        broadcast_tags(cpu);
+        // printf("\nExecute.has_insn before broadcast: %d for pd[%d]\n", cpu->execute.intFU.has_insn, cpu->execute.intFU.pd);
+        // broadcast_tags(cpu);
 
         if (ENABLE_DEBUG_MESSAGES) {
             print_godzilla(cpu);
@@ -1302,12 +1535,23 @@ This function is used to implement the Integer FU of the execute stage
 */
 void run_intFU (APEX_CPU *cpu) {
     if (cpu->execute.intFU.has_insn) {
+        if (cpu->execute.intFU.forwarded_from_mul == 1) {
+            cpu->execute.intFU.ps1_value = cpu->mulFU_broadcasted_value;
+            cpu->execute.intFU.forwarded_from_mul = 0;
+            // printf("\nEXEC - MUL forwarded value: %d\n", cpu->execute.intFU.ps1_value);
+        }
+        else if (cpu->execute.intFU.forwarded_from_mul == 2) {
+            cpu->execute.intFU.ps2_value = cpu->mulFU_broadcasted_value;
+            cpu->execute.intFU.forwarded_from_mul = 0;
+        }
+
         switch (cpu->execute.intFU.opcode) {
             case OPCODE_ADD:
             {
                 cpu->execute.intFU.result_buffer = cpu->execute.intFU.ps1_value + cpu->execute.intFU.ps2_value;
 
                 cpu->intFU_broadcasted_value = cpu->execute.intFU.result_buffer;
+                cpu->intFU_broadcasted_tag = cpu->execute.intFU.pd;
 
                 break;
             }
@@ -1317,6 +1561,7 @@ void run_intFU (APEX_CPU *cpu) {
                 cpu->execute.intFU.result_buffer = cpu->execute.intFU.ps1_value + cpu->execute.intFU.imm;
 
                 cpu->intFU_broadcasted_value = cpu->execute.intFU.result_buffer;
+                cpu->intFU_broadcasted_tag = cpu->execute.intFU.pd;
 
                 break;
             }
@@ -1326,6 +1571,7 @@ void run_intFU (APEX_CPU *cpu) {
                 cpu->execute.intFU.result_buffer = cpu->execute.intFU.ps1_value - cpu->execute.intFU.ps2_value;
 
                 cpu->intFU_broadcasted_value = cpu->execute.intFU.result_buffer;
+                cpu->intFU_broadcasted_tag = cpu->execute.intFU.pd;
 
                 break;
             }
@@ -1335,6 +1581,7 @@ void run_intFU (APEX_CPU *cpu) {
                 cpu->execute.intFU.result_buffer = cpu->execute.intFU.ps1_value - cpu->execute.intFU.imm;
 
                 cpu->intFU_broadcasted_value = cpu->execute.intFU.result_buffer;
+                cpu->intFU_broadcasted_tag = cpu->execute.intFU.pd;
 
                 break;
             }
@@ -1344,6 +1591,7 @@ void run_intFU (APEX_CPU *cpu) {
                 cpu->execute.intFU.result_buffer = cpu->execute.intFU.ps1_value | cpu->execute.intFU.ps2_value;
 
                 cpu->intFU_broadcasted_value = cpu->execute.intFU.result_buffer;
+                cpu->intFU_broadcasted_tag = cpu->execute.intFU.pd;
 
                 break;
             }
@@ -1353,6 +1601,7 @@ void run_intFU (APEX_CPU *cpu) {
                 cpu->execute.intFU.result_buffer = cpu->execute.intFU.ps1_value ^ cpu->execute.intFU.ps2_value;
 
                 cpu->intFU_broadcasted_value = cpu->execute.intFU.result_buffer;
+                cpu->intFU_broadcasted_tag = cpu->execute.intFU.pd;
 
                 break;
             }
@@ -1368,6 +1617,7 @@ void run_intFU (APEX_CPU *cpu) {
                 cpu->execute.intFU.result_buffer = cpu->execute.intFU.ps1_value & cpu->execute.intFU.ps2_value;
 
                 cpu->intFU_broadcasted_value = cpu->execute.intFU.result_buffer;
+                cpu->intFU_broadcasted_tag = cpu->execute.intFU.pd;
 
                 break;
             }
@@ -1377,12 +1627,15 @@ void run_intFU (APEX_CPU *cpu) {
                 cpu->execute.intFU.result_buffer = cpu->execute.intFU.imm + 0;
 
                 cpu->intFU_broadcasted_value = cpu->execute.intFU.result_buffer;
+                cpu->intFU_broadcasted_tag = cpu->execute.intFU.pd;
 
                 break;
             }
         }
 
         cpu->execute.intFU.has_insn = FALSE;
+
+        wakeup_instructions(cpu, cpu->intFU_broadcasted_tag);
     }
 }
 
@@ -1391,24 +1644,38 @@ This function is used to implement the Multiplication FU of the execute stage
 */
 void run_mulFU (APEX_CPU *cpu) {
     if (cpu->execute.mulFU.has_insn) {
-        // if (cpu->execute.mulFU_clock == 0) {
-        //     cpu->execute.mulFU_clock = 1;
-        // }
+        if (cpu->execute.mulFU.forwarded_from_mul == 1) {
+            cpu->execute.mulFU.ps1_value = cpu->mulFU_broadcasted_value;
+            cpu->execute.mulFU.forwarded_from_mul = 0;
 
-        if (cpu->execute.mulFU_clock == 1) {
-            cpu->mulFU_broadcasted_tag = cpu->execute.mulFU.pd;
+            // printf("\nEXEC - MUL forwarded value: %d\n", cpu->execute.mulFU.ps1_value);
+        }
+        else if (cpu->execute.mulFU.forwarded_from_mul == 2) {
+            cpu->execute.mulFU.ps2_value = cpu->mulFU_broadcasted_value;
+            cpu->execute.mulFU.forwarded_from_mul = 0;
 
-            wakeup_instructions(cpu, cpu->mulFU_broadcasted_tag);
+            // printf("\nEXEC - MUL forwarded value: %d\n", cpu->execute.mulFU.ps2_value);
         }
 
-        if (cpu->execute.mulFU_clock == 2) {
+        if (cpu->execute.mulFU_clock == 0) {
             cpu->execute.mulFU.result_buffer = cpu->execute.mulFU.ps1_value * cpu->execute.mulFU.ps2_value;
+            // printf("\nMUL => %d = %d X %d\n", cpu->execute.mulFU.result_buffer, cpu->execute.mulFU.ps1_value, cpu->execute.mulFU.ps2_value);
+        }
+        else if (cpu->execute.mulFU_clock == 1) {
+            // cpu->mulFU_broadcasted_tag = cpu->execute.mulFU.pd;
 
+            // wakeup_instructions(cpu, cpu->mulFU_broadcasted_tag);
+        }
+        else if (cpu->execute.mulFU_clock == 2) {
             cpu->mulFU_broadcasted_tag = cpu->execute.mulFU.pd;
             cpu->mulFU_broadcasted_value = cpu->execute.mulFU.result_buffer;
 
-            printf("\nMulFU fowarded value: %d\n", cpu->mulFU_broadcasted_value);
+            // printf("\nMulFU fowarded value: %d\n", cpu->mulFU_broadcasted_value);
             cpu->execute.mulFU.has_insn = FALSE;
+
+            cpu->mulFU_broadcasted_tag = cpu->execute.mulFU.pd;
+
+            wakeup_instructions(cpu, cpu->mulFU_broadcasted_tag);
         }
 
         cpu->execute.mulFU_clock = (cpu->execute.mulFU_clock + 1)%3;
@@ -1420,11 +1687,51 @@ This function is used to implement the Address Calculation FU of the execute sta
 */
 void run_addFU (APEX_CPU *cpu) {
     if (cpu->execute.addFU.has_insn) {
-        cpu->execute.addFU.result_buffer = cpu->execute.addFU.ps1_value + cpu->execute.addFU.imm;
+        if (cpu->execute.addFU.forwarded_from_mul == 1) {
+            cpu->execute.addFU.ps1_value = cpu->mulFU_broadcasted_value;
+            cpu->execute.addFU.forwarded_from_mul = 0;
 
-        cpu->addFU_broadcasted_value = cpu->execute.addFU.result_buffer;
+            // printf("\nEXEC - MUL forwarded value: %d\n", cpu->execute.addFU.ps1_value);
+        }
+
+        printf("\nOPCODE is : %d\n", cpu->execute.addFU.opcode);
+
+        if (cpu->execute.addFU.opcode == OPCODE_LOADP) {
+            cpu->execute.addFU.result_buffer = cpu->execute.addFU.ps1_value + cpu->execute.addFU.imm;
+
+            cpu->addFU_broadcasted_value = cpu->execute.addFU.result_buffer;
+            cpu->addFU_broadcasted_tag = cpu->execute.addFU.pd;
+
+            cpu->cpu_prf[cpu->execute.addFU.lpsp_inc_dest].value = cpu->execute.addFU.ps1_value + 4;
+            cpu->cpu_prf[cpu->execute.addFU.lpsp_inc_dest].isValid = TRUE;
+
+            // wakeup_instructions(cpu, cpu->execute.addFU.lpsp_inc_dest);
+
+            cpu->godzilla.mem_insn_reg_updt.dest = cpu->cpu_lsq[cpu->execute.addFU.pd].dest;
+            cpu->godzilla.mem_insn_reg_updt.incr_dest = cpu->execute.addFU.lpsp_inc_dest;
+
+            printf("\nInit - LOADP: Committing %d -> %d\n", cpu->godzilla.mem_insn_reg_updt.dest, cpu->godzilla.mem_insn_reg_updt.incr_dest);
+        }
+        else if (cpu->execute.addFU.opcode == OPCODE_STOREP) {
+            cpu->execute.addFU.result_buffer = cpu->execute.addFU.ps2_value + cpu->execute.addFU.imm;
+
+            cpu->addFU_broadcasted_value = cpu->execute.addFU.result_buffer;
+            cpu->addFU_broadcasted_tag = cpu->execute.addFU.pd;
+
+            cpu->cpu_prf[cpu->execute.addFU.lpsp_inc_dest].value = cpu->execute.addFU.ps2_value + 4;
+            cpu->cpu_prf[cpu->execute.addFU.lpsp_inc_dest].isValid = TRUE;
+
+            // wakeup_instructions(cpu, cpu->execute.addFU.lpsp_inc_dest);
+
+            cpu->godzilla.mem_insn_reg_updt.dest = cpu->cpu_lsq[cpu->execute.addFU.pd].dest;
+            cpu->godzilla.mem_insn_reg_updt.incr_dest = cpu->execute.addFU.lpsp_inc_dest;
+
+            printf("\nInit - STOREP: Committing %d -> %d\n", cpu->godzilla.mem_insn_reg_updt.dest, cpu->godzilla.mem_insn_reg_updt.incr_dest);
+        }
 
         cpu->execute.addFU.has_insn = FALSE;
+
+        // wakeup_instructions(cpu, cpu->addFU_broadcasted_tag);
     }
 }
 
@@ -1435,9 +1742,10 @@ static void APEX_execute (APEX_CPU *cpu) {
     if (cpu->execute.is_halt_insn) {
         cpu->halt_cpu = TRUE;
     }
-    run_intFU(cpu);
 
     run_mulFU(cpu);
+
+    run_intFU(cpu);
 
     run_addFU(cpu);
 
@@ -1537,8 +1845,11 @@ APEX_cpu_init(const char *filename)
     printf("\n\n");
 
     cpu->execute.addFU.has_insn = FALSE;
+    cpu->execute.addFU.forwarded_from_mul = 0;
     cpu->execute.intFU.has_insn = FALSE;
+    cpu->execute.intFU.forwarded_from_mul = 0;
     cpu->execute.mulFU.has_insn = FALSE;
+    cpu->execute.mulFU.forwarded_from_mul = 0;
     cpu->execute.mulFU_clock = 0;
     cpu->execute.is_halt_insn = FALSE;
 

@@ -43,6 +43,7 @@ typedef struct CPU_Stage
     int result_buffer;
     int memory_address;
     int has_insn;
+    int lpsp_inc_dest;
     //Comment
 } CPU_Stage;
 
@@ -76,6 +77,8 @@ typedef struct CPU_Godzilla
     int addfu_ready_insn;
     int lsq_target;
     int mem_stage_clock;
+    int lpsp_inc_dest;
+    Mem_insn_reg_updt mem_insn_reg_updt;
 } CPU_Godzilla;
 
 typedef struct CPU_FU {
@@ -92,6 +95,8 @@ typedef struct CPU_FU {
     int cc_tag;
     int cc_value;
     int imm;
+    int forwarded_from_mul;
+    int lpsp_inc_dest;
 } CPU_FU;
 
 typedef struct CPU_Execute {
@@ -134,6 +139,7 @@ typedef struct CPU_IQ
     int dest_type;      // if 0, destination is PRF; if 1, destination is LSQ
     int dest;
     int clock_cycle_at_dispatch;    // This denotes at which cycle the instruction was dispatched
+    int lpsp_inc_dest;
 } CPU_IQ;
 
 typedef struct CPU_LSQ
@@ -250,6 +256,10 @@ typedef struct APEX_CPU
     int halt_cpu;
 } APEX_CPU;
 
+typedef struct Mem_insn_reg_updt {
+    int dest;
+    int incr_dest;
+} Mem_insn_reg_updt;
 
 
 
