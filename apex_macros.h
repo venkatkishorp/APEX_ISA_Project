@@ -27,6 +27,7 @@
 #define dest_load_store 1000
 #define dest_branch 1001
 #define dest_halt 1002
+#define dest_loadp_storep 1003
 
 #define INT_FU 2000
 #define ADD_FU 2001

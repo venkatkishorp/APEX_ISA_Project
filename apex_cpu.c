@@ -972,6 +972,18 @@ void wakeup_instructions (APEX_CPU *cpu, int tag) {
             }
         }
     }
+    else {
+        for (int i = 0; i < IQ_SIZE; i++) {
+            if (cpu->cpu_iq[i].isValid) {
+                if (cpu->cpu_prf[cpu->cpu_iq[i].ps1_tag].isValid) {
+                    cpu->cpu_iq[i].ps1_valid = TRUE;
+                }
+                if (cpu->cpu_prf[cpu->cpu_iq[i].ps2_tag].isValid) {
+                    cpu->cpu_iq[i].ps2_valid = TRUE;
+                }
+            }
+        }
+    }
 
     for (int i = 0; i < IQ_SIZE; i++) {
         if (cpu->cpu_iq[i].isValid && cpu->cpu_iq[i].FU == INT_FU) {

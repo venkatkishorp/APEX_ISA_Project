@@ -47,6 +47,11 @@ typedef struct CPU_Stage
     //Comment
 } CPU_Stage;
 
+typedef struct Mem_insn_reg_updt {
+    int dest;
+    int incr_dest;
+} Mem_insn_reg_updt;
+
 /* Model of CPU stage latch */
 typedef struct CPU_Godzilla
 {
@@ -256,10 +261,6 @@ typedef struct APEX_CPU
     int halt_cpu;
 } APEX_CPU;
 
-typedef struct Mem_insn_reg_updt {
-    int dest;
-    int incr_dest;
-} Mem_insn_reg_updt;
 
 
 
