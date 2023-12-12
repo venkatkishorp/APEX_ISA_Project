@@ -18,17 +18,19 @@
 /* Size of integer register file */
 #define REG_FILE_SIZE 16
 
-/* Function types */
-#define INTFU 1
-#define MULFU 2
-#define AFU   3
-#define BFU   4
-
 #define PRF_SIZE 25
 #define CPRF_SIZE 16
 #define IQ_SIZE 24
 #define LSQ_SIZE 16
 #define ROB_SIZE 32
+
+#define dest_load_store 1000
+#define dest_branch 1001
+#define dest_halt 1002
+
+#define INT_FU 2000
+#define ADD_FU 2001
+#define MUL_FU 2002
 
 /* Numeric OPCODE identifiers for instructions */
 #define OPCODE_ADD 0x0

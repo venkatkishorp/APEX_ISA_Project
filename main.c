@@ -101,7 +101,7 @@ main(int argc, char const *argv[])
                     break;
                 }
 
-                display_function(cpu);
+                // display_function(cpu);
                 break;
             }
 
